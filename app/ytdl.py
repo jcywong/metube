@@ -9,6 +9,7 @@ import logging
 import re
 
 import yt_dlp.networking.impersonate
+from crawlers.hybrid.hybrid_crawler import HybridCrawler
 from dl_formats import get_format, get_opts, AUDIO_FORMATS
 from datetime import datetime
 
@@ -87,18 +88,30 @@ class Download:
                         filename = d['info_dict']['filepath']
                     self.status_queue.put({'status': 'finished', 'filename': filename})
 
-            ret = yt_dlp.YoutubeDL(params={
-                'quiet': True,
-                'no_color': True,
-                'paths': {"home": self.download_dir, "temp": self.temp_dir},
-                'outtmpl': { "default": self.output_template, "chapter": self.output_template_chapter },
-                'format': self.format,
-                'socket_timeout': 30,
-                'ignore_no_formats_error': True,
-                'progress_hooks': [put_status],
-                'postprocessor_hooks': [put_status_postprocessor],
-                **self.ytdl_opts,
-            }).download([self.info.url])
+            ret = -1
+            # 如果是抖音则执行
+            if "douyin" in self.info.url:
+                try:
+                    data = HybridCrawler.hybrid_parsing_single_video(url=self.info.url)
+                    ret = 0
+                    log.info(f"Download douyin success for {self.info.title}")
+                except Exception as e:
+                    log.error(f"Download douyin error for {self.info.title}: {str(e)}")
+                    ret = -1
+            else:
+                # 其他视频下载
+                ret = yt_dlp.YoutubeDL(params={
+                    'quiet': True,
+                    'no_color': True,
+                    'paths': {"home": self.download_dir, "temp": self.temp_dir},
+                    'outtmpl': { "default": self.output_template, "chapter": self.output_template_chapter },
+                    'format': self.format,
+                    'socket_timeout': 30,
+                    'ignore_no_formats_error': True,
+                    'progress_hooks': [put_status],
+                    'postprocessor_hooks': [put_status_postprocessor],
+                    **self.ytdl_opts,
+                }).download([self.info.url])
             self.status_queue.put({'status': 'finished' if ret == 0 else 'error'})
             log.info(f"Finished download for: {self.info.title}")
         except yt_dlp.utils.YoutubeDLError as exc:
@@ -292,16 +305,27 @@ class DownloadQueue:
                 asyncio.create_task(self.notifier.completed(download.info))
 
     def __extract_info(self, url, playlist_strict_mode):
-        return yt_dlp.YoutubeDL(params={
-            'quiet': True,
-            'no_color': True,
-            'extract_flat': True,
-            'ignore_no_formats_error': True,
-            'noplaylist': playlist_strict_mode,
-            'paths': {"home": self.config.DOWNLOAD_DIR, "temp": self.config.TEMP_DIR},
-            **({'impersonate': yt_dlp.networking.impersonate.ImpersonateTarget.from_str(self.config.YTDL_OPTIONS['impersonate'])} if 'impersonate' in self.config.YTDL_OPTIONS else {}),
-            **self.config.YTDL_OPTIONS,
-        }).extract_info(url, download=False)
+        if "douyin" in url:
+            try:
+                hybridCrawler = HybridCrawler()
+                data = hybridCrawler.hybrid_parsing_single_video(url=url)
+                ret = 0
+                log.info(f"Download douyin success for {url}")
+                return data
+            except Exception as e:
+                log.error(f"Download douyin error for {url}: {str(e)}")
+                ret = -1
+        else:
+            return yt_dlp.YoutubeDL(params={
+                'quiet': True,
+                'no_color': True,
+                'extract_flat': True,
+                'ignore_no_formats_error': True,
+                'noplaylist': playlist_strict_mode,
+                'paths': {"home": self.config.DOWNLOAD_DIR, "temp": self.config.TEMP_DIR},
+                **({'impersonate': yt_dlp.networking.impersonate.ImpersonateTarget.from_str(self.config.YTDL_OPTIONS['impersonate'])} if 'impersonate' in self.config.YTDL_OPTIONS else {}),
+                **self.config.YTDL_OPTIONS,
+            }).extract_info(url, download=False)
 
     def __calc_download_path(self, quality, format, folder):
         base_directory = self.config.DOWNLOAD_DIR if (quality != 'audio' and format not in AUDIO_FORMATS) else self.config.AUDIO_DOWNLOAD_DIR
@@ -397,6 +421,7 @@ class DownloadQueue:
             already.add(url)
         try:
             entry = await asyncio.get_running_loop().run_in_executor(None, self.__extract_info, url, playlist_strict_mode)
+            log.info(f'entry: {entry}')
         except yt_dlp.utils.YoutubeDLError as exc:
             return {'status': 'error', 'msg': str(exc)}
         return await self.__add_entry(entry, quality, format, folder, custom_name_prefix, playlist_strict_mode, playlist_item_limit, auto_start, already)

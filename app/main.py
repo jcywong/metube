@@ -2,6 +2,7 @@
 # pylint: disable=no-member,method-hidden
 
 import os
+import re
 import sys
 from aiohttp import web
 import ssl
@@ -11,6 +12,7 @@ import logging
 import json
 import pathlib
 
+from crawlers.hybrid.hybrid_crawler import HybridCrawler
 from ytdl import DownloadQueueNotifier, DownloadQueue
 from yt_dlp.version import __version__ as yt_dlp_version
 
@@ -128,10 +130,15 @@ app.on_startup.append(lambda app: dqueue.initialize())
 
 @routes.post(config.URL_PREFIX + 'add')
 async def add(request):
+    def find_url(string: str):
+        url = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', string)
+        return url[0]
+
+
     log.info("Received request to add download")
     post = await request.json()
     log.info(f"Request data: {post}")
-    url = post.get('url')
+    url = find_url(post.get('url'))
     quality = post.get('quality')
     if not url or not quality:
         log.error("Bad request: missing 'url' or 'quality'")
